@@ -46,6 +46,9 @@ jobs:
           sudo apt update
           sudo apt install -y binaryen
 
+      - name: Patch Tailscale DERPPort support
+        run: scripts/patch-tailscale-derpport.sh
+
       - name: Build Golang WASM
         run: go build -trimpath -ldflags "-X tailscale.com/version.shortStamp=1.82.5 -X tailscale.com/version.longStamp=1.82.5-HeadscaleConsole-check-${{ github.sha }} -s -w" -o ./package/tailscale/pkg/tailscale.wasm ./package/tailscale/tailscale.go
 

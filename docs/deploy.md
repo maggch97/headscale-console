@@ -22,7 +22,7 @@ Each release includes a downloadable ZIP archive with all required assets for de
 Show all available commands:
 
 ```sh
-docker run -it ghcr.io/rickli-cloud/headscale-console:latest --help
+docker run -it ghcr.io/maggch97/headscale-console:latest --help
 ```
 
 ### Image Tags

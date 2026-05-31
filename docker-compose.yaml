@@ -66,7 +66,7 @@ services:
         condition: service_started
 
   headscale-console:
-    image: ghcr.io/rickli-cloud/headscale-console:${HEADSCALE_CONSOLE_VERSION:-latest}
+    image: ghcr.io/maggch97/headscale-console:${HEADSCALE_CONSOLE_VERSION:-latest}
     container_name: headscale-console
     restart: always
     command: serve

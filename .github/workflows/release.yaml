@@ -25,6 +25,9 @@ jobs:
           sudo apt update
           sudo apt install -y binaryen
 
+      - name: Patch Tailscale DERPPort support
+        run: scripts/patch-tailscale-derpport.sh
+
       - name: Build Golang WASM
         run: GOOS=js GOARCH=wasm go build -trimpath -ldflags "-X tailscale.com/version.shortStamp=1.82.5 -X tailscale.com/version.longStamp=1.82.5-HeadscaleConsole-${{ github.event.release.tag_name }} -s -w" -o ./package/tailscale/pkg/tailscale.wasm ./package/tailscale/tailscale.go
 
@@ -155,7 +158,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/rickli-cloud/headscale-console:${{ github.event.release.tag_name }}
+          tags: ghcr.io/maggch97/headscale-console:${{ github.event.release.tag_name }}
           push: true
           build-args: HEADSCALE_CONSOLE_VERSION=${{ github.event.release.tag_name }}
 
@@ -165,6 +168,6 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/rickli-cloud/headscale-console:latest
+          tags: ghcr.io/maggch97/headscale-console:latest
           push: true
           build-args: HEADSCALE_CONSOLE_VERSION=${{ github.event.release.tag_name }}
