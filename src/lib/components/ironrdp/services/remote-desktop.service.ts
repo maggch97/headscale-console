@@ -290,9 +290,26 @@ export class RemoteDesktopService {
   mouseWheel(event: WheelEvent) {
     const vertical = event.deltaY !== 0;
     const rotation = vertical ? event.deltaY : event.deltaX;
+    this.sendWheelRotation(vertical, rotation);
+  }
+
+  sendWheelRotation(vertical: boolean, rotation: number) {
+    const normalizedRotation = Math.max(
+      -32768,
+      Math.min(32767, Math.round(rotation))
+    );
+    if (normalizedRotation === 0) return;
+
     this.doTransactionFromDeviceEvents([
-      this.module.DeviceEvent.wheel_rotations(vertical, -rotation),
+      this.module.DeviceEvent.wheel_rotations(vertical, -normalizedRotation),
     ]);
+  }
+
+  sendMouseButton(button: number, isDown: boolean) {
+    const mouseFnc = isDown
+      ? this.module.DeviceEvent.mouse_button_pressed
+      : this.module.DeviceEvent.mouse_button_released;
+    this.doTransactionFromDeviceEvents([mouseFnc(button)]);
   }
 
   setVisibility(state: boolean) {

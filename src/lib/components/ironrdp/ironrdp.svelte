@@ -58,7 +58,21 @@ Changes made:
   let publicAPI = new PublicAPI(remoteDesktopService);
   let mobileKeyboardActive = $state(false);
   let mobileKeyboardComposing = false;
+  type TouchPoint = { clientX: number; clientY: number };
+  type TouchGesture =
+    | { type: "none" }
+    | {
+        type: "single";
+        start: TouchPoint;
+        last: TouchPoint;
+        dragging: boolean;
+      }
+    | { type: "scroll"; lastCenter: TouchPoint };
+  let touchGesture: TouchGesture = { type: "none" };
   const MOBILE_KEYBOARD_SENTINEL = "\u200b";
+  const TOUCH_DRAG_THRESHOLD = 8;
+  const TOUCH_SCROLL_MULTIPLIER = 1.35;
+  const TOUCH_EVENT_OPTIONS = { passive: false };
   const mobileKeyboardHandledCodes = new Set([
     "Escape",
     "Tab",
@@ -441,6 +455,22 @@ Changes made:
   function initListeners() {
     serverBridgeListeners();
     userInteractionListeners();
+    canvas.addEventListener(
+      "touchstart",
+      handleCanvasTouchStart,
+      TOUCH_EVENT_OPTIONS
+    );
+    canvas.addEventListener(
+      "touchmove",
+      handleCanvasTouchMove,
+      TOUCH_EVENT_OPTIONS
+    );
+    canvas.addEventListener("touchend", handleCanvasTouchEnd, {
+      passive: false,
+    });
+    canvas.addEventListener("touchcancel", handleCanvasTouchCancel, {
+      passive: false,
+    });
 
     function captureKeys(evt: KeyboardEvent) {
       if (capturingInputs()) {
@@ -659,13 +689,20 @@ Changes made:
   }
 
   function getMousePos(evt: MouseEvent) {
-    const rect = canvas?.getBoundingClientRect(),
-      scaleX = canvas?.width / rect.width,
-      scaleY = canvas?.height / rect.height;
+    updateMousePositionFromClientPoint({
+      clientX: evt.clientX,
+      clientY: evt.clientY,
+    });
+  }
+
+  function updateMousePositionFromClientPoint(point: TouchPoint) {
+    const rect = canvas.getBoundingClientRect(),
+      scaleX = canvas.width / rect.width,
+      scaleY = canvas.height / rect.height;
 
     const coord = {
-      x: Math.round((evt.clientX - rect.left) * scaleX),
-      y: Math.round((evt.clientY - rect.top) * scaleY),
+      x: Math.round((point.clientX - rect.left) * scaleX),
+      y: Math.round((point.clientY - rect.top) * scaleY),
     };
 
     remoteDesktopService.updateMousePosition(coord);
@@ -692,7 +729,155 @@ Changes made:
   }
 
   function mouseWheel(evt: WheelEvent) {
+    evt.preventDefault();
     remoteDesktopService.mouseWheel(evt);
+  }
+
+  function pointFromTouch(touch: Touch): TouchPoint {
+    return {
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+    };
+  }
+
+  function centerFromTouches(touches: TouchList): TouchPoint {
+    return {
+      clientX: (touches[0].clientX + touches[1].clientX) / 2,
+      clientY: (touches[0].clientY + touches[1].clientY) / 2,
+    };
+  }
+
+  function pointDistance(a: TouchPoint, b: TouchPoint) {
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+
+  function captureCanvasTouch(evt: TouchEvent) {
+    evt.preventDefault();
+    evt.stopPropagation();
+  }
+
+  function beginTouchScroll(touches: TouchList) {
+    if (touchGesture.type === "single" && touchGesture.dragging) {
+      remoteDesktopService.sendMouseButton(0, false);
+    }
+
+    const center = centerFromTouches(touches);
+    updateMousePositionFromClientPoint(center);
+    touchGesture = { type: "scroll", lastCenter: center };
+  }
+
+  function handleCanvasTouchStart(evt: TouchEvent) {
+    if (!isVisible) return;
+    captureCanvasTouch(evt);
+    canvas.focus({ preventScroll: true });
+
+    if (evt.touches.length >= 2) {
+      beginTouchScroll(evt.touches);
+      return;
+    }
+
+    const point = pointFromTouch(evt.touches[0]);
+    updateMousePositionFromClientPoint(point);
+    touchGesture = {
+      type: "single",
+      start: point,
+      last: point,
+      dragging: false,
+    };
+  }
+
+  function handleCanvasTouchMove(evt: TouchEvent) {
+    if (!isVisible) return;
+    captureCanvasTouch(evt);
+
+    if (evt.touches.length >= 2) {
+      if (touchGesture.type !== "scroll") {
+        beginTouchScroll(evt.touches);
+        return;
+      }
+
+      const center = centerFromTouches(evt.touches);
+      const deltaX =
+        (touchGesture.lastCenter.clientX - center.clientX) *
+        TOUCH_SCROLL_MULTIPLIER;
+      const deltaY =
+        (touchGesture.lastCenter.clientY - center.clientY) *
+        TOUCH_SCROLL_MULTIPLIER;
+
+      updateMousePositionFromClientPoint(center);
+
+      if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+        remoteDesktopService.sendWheelRotation(true, deltaY);
+      } else {
+        remoteDesktopService.sendWheelRotation(false, deltaX);
+      }
+
+      touchGesture = { type: "scroll", lastCenter: center };
+      return;
+    }
+
+    if (touchGesture.type !== "single" || evt.touches.length !== 1) return;
+
+    const point = pointFromTouch(evt.touches[0]);
+    updateMousePositionFromClientPoint(point);
+    let dragging = touchGesture.dragging;
+
+    if (
+      !dragging &&
+      pointDistance(touchGesture.start, point) >= TOUCH_DRAG_THRESHOLD
+    ) {
+      remoteDesktopService.sendMouseButton(0, true);
+      dragging = true;
+    }
+
+    touchGesture = {
+      type: "single",
+      start: touchGesture.start,
+      last: point,
+      dragging,
+    };
+  }
+
+  function finishSingleTouch(sendTap: boolean) {
+    if (touchGesture.type !== "single") return;
+
+    updateMousePositionFromClientPoint(touchGesture.last);
+
+    if (touchGesture.dragging) {
+      remoteDesktopService.sendMouseButton(0, false);
+    } else if (sendTap) {
+      remoteDesktopService.sendMouseButton(0, true);
+      remoteDesktopService.sendMouseButton(0, false);
+    }
+
+    touchGesture = { type: "none" };
+  }
+
+  function handleCanvasTouchEnd(evt: TouchEvent) {
+    if (!isVisible) return;
+    captureCanvasTouch(evt);
+
+    if (touchGesture.type === "scroll") {
+      if (evt.touches.length >= 2) {
+        const center = centerFromTouches(evt.touches);
+        touchGesture = { type: "scroll", lastCenter: center };
+      } else {
+        touchGesture = { type: "none" };
+      }
+      return;
+    }
+
+    finishSingleTouch(evt.touches.length === 0);
+  }
+
+  function handleCanvasTouchCancel(evt: TouchEvent) {
+    captureCanvasTouch(evt);
+
+    if (touchGesture.type === "single" && touchGesture.dragging) {
+      remoteDesktopService.sendMouseButton(0, false);
+    }
+
+    touchGesture = { type: "none" };
   }
 
   function setMouseIn(evt: MouseEvent) {
@@ -933,6 +1118,9 @@ Changes made:
       style={viewerStyle}
       contenteditable={isFirefox}
       onpaste={ffOnPasteHandler}
+      onselectstart={(event) => {
+        event.preventDefault();
+      }}
     >
       <canvas
         bind:this={canvas}
@@ -951,6 +1139,7 @@ Changes made:
         onselectstart={(event) => {
           event.preventDefault();
         }}
+        draggable="false"
         id="renderer"
         tabindex="0"
       ></canvas>
@@ -993,6 +1182,7 @@ Changes made:
   .screen-wrapper {
     position: relative;
     overflow: hidden !important;
+    overscroll-behavior: none;
   }
 
   .capturing-inputs {
@@ -1000,9 +1190,21 @@ Changes made:
     outline-offset: -1px;
   }
 
+  .screen-viewer {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
   canvas {
     width: 100%;
     height: 100%;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-user-drag: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .mobile-keyboard-toggle {
@@ -1024,6 +1226,8 @@ Changes made:
     color: transparent;
     background: transparent;
     caret-color: transparent;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   @media (hover: none) and (pointer: coarse) {
