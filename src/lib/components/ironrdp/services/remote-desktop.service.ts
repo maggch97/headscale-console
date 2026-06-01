@@ -312,6 +312,26 @@ export class RemoteDesktopService {
     this.session?.resize(width, height, scale);
   }
 
+  sendUnicodeText(text: string) {
+    const events: DeviceEvent[] = [];
+    for (const char of Array.from(text)) {
+      events.push(
+        this.module.DeviceEvent.unicode_pressed(char),
+        this.module.DeviceEvent.unicode_released(char)
+      );
+    }
+    this.doTransactionFromDeviceEvents(events);
+  }
+
+  sendKeyCode(code: string) {
+    const keyScanCode = scanCode(code, OS.WINDOWS);
+    if (Number.isNaN(keyScanCode)) return;
+    this.doTransactionFromDeviceEvents([
+      this.module.DeviceEvent.key_pressed(keyScanCode),
+      this.module.DeviceEvent.key_released(keyScanCode),
+    ]);
+  }
+
   /// Triggered by the browser when local clipboard is updated. Clipboard backend should
   /// cache the content and send it to the server when it is requested.
   onClipboardChanged(transaction: ClipboardTransaction): Promise<void> {

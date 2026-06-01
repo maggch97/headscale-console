@@ -10,6 +10,7 @@ Changes made:
 
 <script lang="ts">
   import { onMount } from "svelte";
+  import Keyboard from "lucide-svelte/icons/keyboard";
 
   import { LogType } from "./enums/LogType";
   import { ScreenScale } from "./enums/ScreenScale";
@@ -49,11 +50,26 @@ Changes made:
   let wrapper: HTMLDivElement;
   let screenViewer: HTMLDivElement;
   let canvas: HTMLCanvasElement;
+  let mobileKeyboardInput: HTMLTextAreaElement;
 
   let viewerStyle = $state("");
   let wrapperStyle = $state("");
   let remoteDesktopService = new RemoteDesktopService(module);
   let publicAPI = new PublicAPI(remoteDesktopService);
+  let mobileKeyboardActive = $state(false);
+  let mobileKeyboardComposing = false;
+  const mobileKeyboardHandledCodes = new Set([
+    "Escape",
+    "Tab",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+  ]);
 
   // Firefox's clipboard API is very limited, and doesn't support reading from the clipboard
   // without changing browser settings via `about:config`.
@@ -708,6 +724,81 @@ Changes made:
     return true;
   }
 
+  function toggleMobileKeyboard() {
+    if (
+      mobileKeyboardActive ||
+      document.activeElement === mobileKeyboardInput
+    ) {
+      mobileKeyboardInput.blur();
+      canvas.focus({ preventScroll: true });
+      return;
+    }
+
+    mobileKeyboardInput.value = "";
+    mobileKeyboardInput.focus({ preventScroll: true });
+  }
+
+  function mobileKeyboardTogglePointerDown(evt: PointerEvent) {
+    evt.preventDefault();
+    toggleMobileKeyboard();
+  }
+
+  function mobileKeyboardBeforeInput(evt: InputEvent) {
+    if (!isVisible) return;
+
+    switch (evt.inputType) {
+      case "deleteContentBackward":
+      case "deleteWordBackward":
+      case "deleteSoftLineBackward":
+      case "deleteHardLineBackward":
+        evt.preventDefault();
+        mobileKeyboardInput.value = "";
+        remoteDesktopService.sendKeyCode("Backspace");
+        break;
+      case "insertLineBreak":
+      case "insertParagraph":
+        evt.preventDefault();
+        mobileKeyboardInput.value = "";
+        remoteDesktopService.sendKeyCode("Enter");
+        break;
+      case "insertText":
+        if (evt.data) {
+          evt.preventDefault();
+          mobileKeyboardInput.value = "";
+          remoteDesktopService.sendUnicodeText(evt.data);
+        }
+        break;
+    }
+  }
+
+  function mobileKeyboardInputEvent() {
+    if (!isVisible || mobileKeyboardComposing) return;
+    const value = mobileKeyboardInput.value;
+    if (!value) return;
+    mobileKeyboardInput.value = "";
+    remoteDesktopService.sendUnicodeText(value);
+  }
+
+  function mobileKeyboardCompositionStart() {
+    mobileKeyboardComposing = true;
+  }
+
+  function mobileKeyboardCompositionEnd(evt: CompositionEvent) {
+    mobileKeyboardComposing = false;
+    const value = evt.data || mobileKeyboardInput.value;
+    mobileKeyboardInput.value = "";
+    if (value) {
+      remoteDesktopService.sendUnicodeText(value);
+    }
+  }
+
+  function mobileKeyboardKeyDown(evt: KeyboardEvent) {
+    if (!mobileKeyboardHandledCodes.has(evt.code)) return;
+    evt.preventDefault();
+    mobileKeyboardInput.value = "";
+    remoteDesktopService.sendKeyCode(evt.code);
+  }
+
   function getWindowSize() {
     const win = window;
     const doc = document;
@@ -753,6 +844,7 @@ Changes made:
     loggingService.info("Dom ready");
     await initcanvas();
     initClipboard();
+    mobileKeyboardInput.setAttribute("autocorrect", "off");
     canvas.focus();
   });
 </script>
@@ -792,6 +884,37 @@ Changes made:
         id="renderer"
         tabindex="0"
       ></canvas>
+      <button
+        class="mobile-keyboard-toggle"
+        class:active={mobileKeyboardActive}
+        aria-label="Toggle keyboard"
+        title="Toggle keyboard"
+        type="button"
+        onpointerdown={mobileKeyboardTogglePointerDown}
+      >
+        <Keyboard aria-hidden="true" />
+      </button>
+      <textarea
+        bind:this={mobileKeyboardInput}
+        class="mobile-keyboard-input"
+        autocomplete="off"
+        autocapitalize="none"
+        inputmode="text"
+        spellcheck="false"
+        tabindex="-1"
+        rows="1"
+        onbeforeinput={mobileKeyboardBeforeInput}
+        oninput={mobileKeyboardInputEvent}
+        oncompositionstart={mobileKeyboardCompositionStart}
+        oncompositionend={mobileKeyboardCompositionEnd}
+        onkeydown={mobileKeyboardKeyDown}
+        onfocus={() => {
+          mobileKeyboardActive = true;
+        }}
+        onblur={() => {
+          mobileKeyboardActive = false;
+        }}
+      ></textarea>
     </div>
   </div>
 </div>
@@ -810,6 +933,63 @@ Changes made:
   canvas {
     width: 100%;
     height: 100%;
+  }
+
+  .mobile-keyboard-toggle {
+    display: none;
+  }
+
+  .mobile-keyboard-input {
+    display: none;
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0.01;
+    border: 0;
+    outline: 0;
+    padding: 0;
+    resize: none;
+    color: transparent;
+    background: transparent;
+    caret-color: transparent;
+  }
+
+  @media (hover: none) and (pointer: coarse) {
+    .mobile-keyboard-toggle {
+      position: absolute;
+      right: max(12px, env(safe-area-inset-right));
+      bottom: max(12px, env(safe-area-inset-bottom));
+      z-index: 20;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      border: 1px solid rgba(148, 163, 184, 0.55);
+      border-radius: 8px;
+      color: rgb(15, 23, 42);
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.18);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    .mobile-keyboard-toggle.active {
+      color: rgb(255, 255, 255);
+      background: rgba(15, 23, 42, 0.88);
+      border-color: rgba(15, 23, 42, 0.88);
+    }
+
+    .mobile-keyboard-toggle :global(svg) {
+      width: 22px;
+      height: 22px;
+    }
+
+    .mobile-keyboard-input {
+      display: block;
+    }
   }
 
   ::selection {
