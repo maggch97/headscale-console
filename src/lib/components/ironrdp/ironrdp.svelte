@@ -58,6 +58,7 @@ Changes made:
   let publicAPI = new PublicAPI(remoteDesktopService);
   let mobileKeyboardActive = $state(false);
   let mobileKeyboardComposing = false;
+  const MOBILE_KEYBOARD_SENTINEL = "\u200b";
   const mobileKeyboardHandledCodes = new Set([
     "Escape",
     "Tab",
@@ -734,13 +735,63 @@ Changes made:
       return;
     }
 
-    mobileKeyboardInput.value = "";
+    resetMobileKeyboardInput();
     mobileKeyboardInput.focus({ preventScroll: true });
   }
 
   function mobileKeyboardTogglePointerDown(evt: PointerEvent) {
     evt.preventDefault();
     toggleMobileKeyboard();
+  }
+
+  function resetMobileKeyboardInput() {
+    if (!mobileKeyboardInput) return;
+
+    mobileKeyboardInput.value = MOBILE_KEYBOARD_SENTINEL;
+
+    requestAnimationFrame(() => {
+      try {
+        const position = mobileKeyboardInput.value.length;
+        mobileKeyboardInput.setSelectionRange(position, position);
+      } catch {
+        // Some mobile browsers reject selection changes while the keyboard opens.
+      }
+    });
+  }
+
+  function stripMobileKeyboardSentinel(value: string) {
+    return value.split(MOBILE_KEYBOARD_SENTINEL).join("");
+  }
+
+  function sendMobileKeyboardText(value: string) {
+    const text = stripMobileKeyboardSentinel(value);
+    if (!text) return;
+
+    let textBuffer = "";
+    const flushTextBuffer = () => {
+      if (!textBuffer) return;
+      remoteDesktopService.sendUnicodeText(textBuffer);
+      textBuffer = "";
+    };
+
+    const chars = Array.from(text);
+    for (let i = 0; i < chars.length; i++) {
+      const char = chars[i];
+
+      if (char === "\r" || char === "\n") {
+        if (char === "\r" && chars[i + 1] === "\n") {
+          i++;
+        }
+
+        flushTextBuffer();
+        remoteDesktopService.sendKeyCode("Enter");
+        continue;
+      }
+
+      textBuffer += char;
+    }
+
+    flushTextBuffer();
   }
 
   function mobileKeyboardBeforeInput(evt: InputEvent) {
@@ -752,20 +803,28 @@ Changes made:
       case "deleteSoftLineBackward":
       case "deleteHardLineBackward":
         evt.preventDefault();
-        mobileKeyboardInput.value = "";
         remoteDesktopService.sendKeyCode("Backspace");
+        resetMobileKeyboardInput();
+        break;
+      case "deleteContentForward":
+      case "deleteWordForward":
+      case "deleteSoftLineForward":
+      case "deleteHardLineForward":
+        evt.preventDefault();
+        remoteDesktopService.sendKeyCode("Delete");
+        resetMobileKeyboardInput();
         break;
       case "insertLineBreak":
       case "insertParagraph":
         evt.preventDefault();
-        mobileKeyboardInput.value = "";
         remoteDesktopService.sendKeyCode("Enter");
+        resetMobileKeyboardInput();
         break;
       case "insertText":
-        if (evt.data) {
+        if (evt.data === "\r" || evt.data === "\n") {
           evt.preventDefault();
-          mobileKeyboardInput.value = "";
-          remoteDesktopService.sendUnicodeText(evt.data);
+          remoteDesktopService.sendKeyCode("Enter");
+          resetMobileKeyboardInput();
         }
         break;
     }
@@ -774,9 +833,18 @@ Changes made:
   function mobileKeyboardInputEvent() {
     if (!isVisible || mobileKeyboardComposing) return;
     const value = mobileKeyboardInput.value;
-    if (!value) return;
-    mobileKeyboardInput.value = "";
-    remoteDesktopService.sendUnicodeText(value);
+
+    if (value === "") {
+      remoteDesktopService.sendKeyCode("Backspace");
+      resetMobileKeyboardInput();
+      return;
+    }
+
+    if (value !== MOBILE_KEYBOARD_SENTINEL) {
+      sendMobileKeyboardText(value);
+    }
+
+    resetMobileKeyboardInput();
   }
 
   function mobileKeyboardCompositionStart() {
@@ -785,18 +853,19 @@ Changes made:
 
   function mobileKeyboardCompositionEnd(evt: CompositionEvent) {
     mobileKeyboardComposing = false;
-    const value = evt.data || mobileKeyboardInput.value;
-    mobileKeyboardInput.value = "";
+    const value =
+      stripMobileKeyboardSentinel(mobileKeyboardInput.value) || evt.data;
     if (value) {
-      remoteDesktopService.sendUnicodeText(value);
+      sendMobileKeyboardText(value);
     }
+    resetMobileKeyboardInput();
   }
 
   function mobileKeyboardKeyDown(evt: KeyboardEvent) {
     if (!mobileKeyboardHandledCodes.has(evt.code)) return;
     evt.preventDefault();
-    mobileKeyboardInput.value = "";
     remoteDesktopService.sendKeyCode(evt.code);
+    resetMobileKeyboardInput();
   }
 
   function getWindowSize() {
@@ -845,6 +914,7 @@ Changes made:
     await initcanvas();
     initClipboard();
     mobileKeyboardInput.setAttribute("autocorrect", "off");
+    resetMobileKeyboardInput();
     canvas.focus();
   });
 </script>
