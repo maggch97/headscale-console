@@ -852,12 +852,18 @@ const parser = new UAParser();
 const parsedUA = parser.getResult();
 const engine = parsedUA.engine.name?.toLowerCase() as EngineName;
 
+function getEngineMap<T>(maps: Record<string, T | null>): T | null {
+  return maps[engine] || maps.blink || maps.gecko || null;
+}
+
 export const scanCode = function (code: string, targetOs: OS): number {
-  const map = CodeToScanCode[targetOs][engine] || CodeToScanCode.linux.gecko;
+  const map = getEngineMap(CodeToScanCode[targetOs]);
+  if (!map) return NaN;
   return parseInt(map[code], 16);
 };
 
 export const code = function (scanCode: string, targetOs: OS): string {
-  const map = ScanCodeToCode[targetOs][engine] || CodeToScanCode.linux.gecko;
+  const map = getEngineMap(ScanCodeToCode[targetOs]);
+  if (!map) return "Unidentified";
   return map[scanCode];
 };
