@@ -66,11 +66,14 @@ Changes made:
         start: TouchPoint;
         last: TouchPoint;
         dragging: boolean;
+        longPressed: boolean;
       }
     | { type: "scroll"; lastCenter: TouchPoint };
   let touchGesture: TouchGesture = { type: "none" };
+  let touchLongPressTimer: ReturnType<typeof setTimeout> | undefined;
   const MOBILE_KEYBOARD_SENTINEL = "\u200b";
   const TOUCH_DRAG_THRESHOLD = 8;
+  const TOUCH_LONG_PRESS_TIMEOUT = 750;
   const TOUCH_SCROLL_MULTIPLIER = 1.35;
   const TOUCH_EVENT_OPTIONS = { passive: false };
   const mobileKeyboardHandledCodes = new Set([
@@ -756,7 +759,38 @@ Changes made:
     evt.stopPropagation();
   }
 
+  function clearTouchLongPressTimer() {
+    if (touchLongPressTimer === undefined) return;
+    clearTimeout(touchLongPressTimer);
+    touchLongPressTimer = undefined;
+  }
+
+  function startTouchLongPressTimer() {
+    clearTouchLongPressTimer();
+    touchLongPressTimer = setTimeout(() => {
+      touchLongPressTimer = undefined;
+
+      if (
+        touchGesture.type !== "single" ||
+        touchGesture.dragging ||
+        touchGesture.longPressed
+      ) {
+        return;
+      }
+
+      updateMousePositionFromClientPoint(touchGesture.last);
+      remoteDesktopService.sendMouseButton(2, true);
+      remoteDesktopService.sendMouseButton(2, false);
+      touchGesture = {
+        ...touchGesture,
+        longPressed: true,
+      };
+    }, TOUCH_LONG_PRESS_TIMEOUT);
+  }
+
   function beginTouchScroll(touches: TouchList) {
+    clearTouchLongPressTimer();
+
     if (touchGesture.type === "single" && touchGesture.dragging) {
       remoteDesktopService.sendMouseButton(0, false);
     }
@@ -783,7 +817,9 @@ Changes made:
       start: point,
       last: point,
       dragging: false,
+      longPressed: false,
     };
+    startTouchLongPressTimer();
   }
 
   function handleCanvasTouchMove(evt: TouchEvent) {
@@ -821,11 +857,14 @@ Changes made:
     const point = pointFromTouch(evt.touches[0]);
     updateMousePositionFromClientPoint(point);
     let dragging = touchGesture.dragging;
+    const longPressed = touchGesture.longPressed;
 
     if (
+      !longPressed &&
       !dragging &&
       pointDistance(touchGesture.start, point) >= TOUCH_DRAG_THRESHOLD
     ) {
+      clearTouchLongPressTimer();
       remoteDesktopService.sendMouseButton(0, true);
       dragging = true;
     }
@@ -835,17 +874,19 @@ Changes made:
       start: touchGesture.start,
       last: point,
       dragging,
+      longPressed,
     };
   }
 
   function finishSingleTouch(sendTap: boolean) {
     if (touchGesture.type !== "single") return;
+    clearTouchLongPressTimer();
 
     updateMousePositionFromClientPoint(touchGesture.last);
 
     if (touchGesture.dragging) {
       remoteDesktopService.sendMouseButton(0, false);
-    } else if (sendTap) {
+    } else if (sendTap && !touchGesture.longPressed) {
       remoteDesktopService.sendMouseButton(0, true);
       remoteDesktopService.sendMouseButton(0, false);
     }
@@ -872,6 +913,7 @@ Changes made:
 
   function handleCanvasTouchCancel(evt: TouchEvent) {
     captureCanvasTouch(evt);
+    clearTouchLongPressTimer();
 
     if (touchGesture.type === "single" && touchGesture.dragging) {
       remoteDesktopService.sendMouseButton(0, false);
